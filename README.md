@@ -16,7 +16,7 @@ A Node.js command-line tool for backing up your Nostr events from multiple sourc
 ## Installation
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/djinoz/nostr-event-backup-to-relay
 cd nostr-event-backup-to-relay
 npm install
 chmod +x nostr-backup.js
