@@ -1,0 +1,20 @@
+{
+  "name": "nostr-event-backup-to-relay",
+  "version": "1.0.0",
+  "description": "Backup nostr events to your personal relay",
+  "main": "nostr-backup.js",
+  "type": "module",
+  "bin": {
+    "nostr-event-backup-to-relay": "./nostr-backup.js"
+  },
+  "scripts": {
+    "start": "node nostr-backup.js"
+  },
+  "dependencies": {
+    "nostr-tools": "^2.7.0",
+    "commander": "^12.0.0"
+  },
+  "keywords": ["nostr", "backup", "relay"],
+  "author": "djinoz",
+  "license": "MIT"
+}
