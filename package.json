@@ -11,10 +11,16 @@
     "start": "node nostr-backup.js"
   },
   "dependencies": {
+    "commander": "^12.0.0",
     "nostr-tools": "^2.7.0",
-    "commander": "^12.0.0"
+    "socks-proxy-agent": "^8.0.5",
+    "ws": "^8.18.3"
   },
-  "keywords": ["nostr", "backup", "relay"],
+  "keywords": [
+    "nostr",
+    "backup",
+    "relay"
+  ],
   "author": "djinoz",
   "license": "MIT"
 }

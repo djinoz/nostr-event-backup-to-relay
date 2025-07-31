@@ -2,9 +2,278 @@
 
 import { SimplePool, nip19 } from 'nostr-tools'
 import { program } from 'commander'
+import { SocksProxyAgent } from 'socks-proxy-agent'
+import WebSocket from 'ws'
+import net from 'net'
+import { EventEmitter } from 'events'
 
 // Add Node.js TLS options to bypass certificate issues
 process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = 0
+
+// Tor proxy configuration
+const TOR_PROXY = 'socks5h://127.0.0.1:9050'
+const TOR_HOST = '127.0.0.1'
+const TOR_PORT = 9050
+
+// Test Tor connectivity
+async function testTorConnection() {
+  return new Promise((resolve) => {
+    console.log('🔍 Testing Tor connectivity...')
+    const socket = new net.Socket()
+    const timeout = setTimeout(() => {
+      socket.destroy()
+      console.log('❌ Tor connection test failed: timeout')
+      resolve(false)
+    }, 5000)
+    
+    socket.connect(TOR_PORT, TOR_HOST, () => {
+      clearTimeout(timeout)
+      socket.destroy()
+      console.log('✅ Tor connection test passed')
+      resolve(true)
+    })
+    
+    socket.on('error', (err) => {
+      clearTimeout(timeout)
+      console.log(`❌ Tor connection test failed: ${err.message}`)
+      resolve(false)
+    })
+  })
+}
+
+// Custom Tor-enabled relay connection for .onion relays
+class TorEnabledPool extends SimplePool {
+  async querySync(relays, filter) {
+    // Check if any relays are .onion addresses
+    const onionRelays = relays.filter(relay => relay.includes('.onion'))
+    const clearnetRelays = relays.filter(relay => !relay.includes('.onion'))
+    
+    let allEvents = []
+    
+    // Handle clearnet relays with normal SimplePool
+    if (clearnetRelays.length > 0) {
+      try {
+        const clearnetEvents = await super.querySync(clearnetRelays, filter)
+        allEvents.push(...clearnetEvents)
+      } catch (error) {
+        console.log(`⚠️  Error querying clearnet relays: ${error.message}`)
+      }
+    }
+    
+    // Handle .onion relays with custom WebSocket + Tor proxy
+    if (onionRelays.length > 0) {
+      const torConnected = await testTorConnection()
+      if (!torConnected) {
+        console.log('⚠️  Tor not available - skipping .onion relays')
+      } else {
+        for (const relayUrl of onionRelays) {
+          try {
+            const onionEvents = await this.queryOnionRelay(relayUrl, filter)
+            allEvents.push(...onionEvents)
+          } catch (error) {
+            console.log(`⚠️  Error querying .onion relay ${relayUrl}: ${error.message}`)
+          }
+        }
+      }
+    }
+    
+    return allEvents
+  }
+  
+  async queryOnionRelay(relayUrl, filter) {
+    return new Promise((resolve, reject) => {
+      const agent = new SocksProxyAgent(TOR_PROXY)
+      const ws = new WebSocket(relayUrl, { agent, rejectUnauthorized: false })
+      const events = []
+      let isComplete = false
+      
+      const timeout = setTimeout(() => {
+        if (!isComplete) {
+          isComplete = true
+          ws.close()
+          reject(new Error('Timeout querying .onion relay'))
+        }
+      }, 15000)
+      
+      ws.on('open', () => {
+        console.log(`🧅 Connected to .onion relay: ${relayUrl}`)
+        const subId = Math.random().toString(36).substr(2, 9)
+        const reqMessage = JSON.stringify(['REQ', subId, filter])
+        ws.send(reqMessage)
+      })
+      
+      ws.on('message', (data) => {
+        try {
+          const message = JSON.parse(data.toString())
+          const [type, subId, event] = message
+          
+          if (type === 'EVENT' && event) {
+            events.push(event)
+          } else if (type === 'EOSE') {
+            if (!isComplete) {
+              isComplete = true
+              clearTimeout(timeout)
+              ws.close()
+              console.log(`📥 Retrieved ${events.length} events from ${relayUrl}`)
+              resolve(events)
+            }
+          }
+        } catch (error) {
+          console.log(`⚠️  Error parsing message from ${relayUrl}: ${error.message}`)
+        }
+      })
+      
+      ws.on('error', (error) => {
+        if (!isComplete) {
+          isComplete = true
+          clearTimeout(timeout)
+          reject(error)
+        }
+      })
+      
+      ws.on('close', () => {
+        if (!isComplete) {
+          isComplete = true
+          clearTimeout(timeout)
+          resolve(events)
+        }
+      })
+    })
+  }
+  
+  publish(relays, event) {
+    // Check if any relays are .onion addresses
+    const onionRelays = relays.filter(relay => relay.includes('.onion'))
+    const clearnetRelays = relays.filter(relay => !relay.includes('.onion'))
+    
+    // Create a custom event emitter for handling both types
+    const publisher = new EventEmitter()
+    
+    let publishCount = 0
+    const totalRelays = relays.length
+    
+    // Handle clearnet relays with parent implementation
+    if (clearnetRelays.length > 0) {
+      try {
+        const clearnetPub = super.publish(clearnetRelays, event)
+        if (clearnetPub && typeof clearnetPub.on === 'function') {
+          clearnetPub.on('ok', (relay, success, message) => {
+            publishCount++
+            publisher.emit('ok', relay, success, message)
+            if (publishCount >= totalRelays) {
+              publisher.emit('complete')
+            }
+          })
+          clearnetPub.on('failed', (relay, message) => {
+            publishCount++
+            publisher.emit('failed', relay, message)
+            if (publishCount >= totalRelays) {
+              publisher.emit('complete')
+            }
+          })
+        }
+      } catch (error) {
+        clearnetRelays.forEach(relay => {
+          publishCount++
+          publisher.emit('failed', relay, error.message)
+          if (publishCount >= totalRelays) {
+            publisher.emit('complete')
+          }
+        })
+      }
+    }
+    
+    // Handle .onion relays with custom implementation
+    if (onionRelays.length > 0) {
+      this.publishToOnionRelays(onionRelays, event, publisher, () => {
+        publishCount += onionRelays.length
+        if (publishCount >= totalRelays) {
+          publisher.emit('complete')
+        }
+      })
+    }
+    
+    return publisher
+  }
+  
+  async publishToOnionRelays(relays, event, publisher, callback) {
+    const torConnected = await testTorConnection()
+    if (!torConnected) {
+      relays.forEach(relay => {
+        publisher.emit('failed', relay, 'Tor not available')
+      })
+      callback()
+      return
+    }
+    
+    const publishPromises = relays.map(relayUrl => 
+      this.publishToOnionRelay(relayUrl, event, publisher)
+    )
+    
+    await Promise.allSettled(publishPromises)
+    callback()
+  }
+  
+  async publishToOnionRelay(relayUrl, event, publisher) {
+    return new Promise((resolve) => {
+      const agent = new SocksProxyAgent(TOR_PROXY)
+      const ws = new WebSocket(relayUrl, { agent, rejectUnauthorized: false })
+      let isComplete = false
+      
+      const timeout = setTimeout(() => {
+        if (!isComplete) {
+          isComplete = true
+          ws.close()
+          publisher.emit('failed', relayUrl, 'Timeout publishing to .onion relay')
+          resolve()
+        }
+      }, 15000)
+      
+      ws.on('open', () => {
+        console.log(`🧅 Publishing to .onion relay: ${relayUrl}`)
+        const eventMessage = JSON.stringify(['EVENT', event])
+        ws.send(eventMessage)
+      })
+      
+      ws.on('message', (data) => {
+        try {
+          const message = JSON.parse(data.toString())
+          const [type, eventId, success, reason] = message
+          
+          if (type === 'OK') {
+            if (!isComplete) {
+              isComplete = true
+              clearTimeout(timeout)
+              ws.close()
+              publisher.emit('ok', relayUrl, success, reason || '')
+              resolve()
+            }
+          }
+        } catch (error) {
+          console.log(`⚠️  Error parsing response from ${relayUrl}: ${error.message}`)
+        }
+      })
+      
+      ws.on('error', (error) => {
+        if (!isComplete) {
+          isComplete = true
+          clearTimeout(timeout)
+          publisher.emit('failed', relayUrl, error.message)
+          resolve()
+        }
+      })
+      
+      ws.on('close', () => {
+        if (!isComplete) {
+          isComplete = true
+          clearTimeout(timeout)
+          publisher.emit('failed', relayUrl, 'Connection closed without response')
+          resolve()
+        }
+      })
+    })
+  }
+}
 
 // Parse command line arguments
 program
@@ -99,7 +368,7 @@ if (until) console.log(`📅 Until: ${new Date(until * 1000).toISOString()}`)
 console.log(`📦 Batch size: ${options.batchSize}`)
 console.log('---')
 
-const pool = new SimplePool()
+const pool = new TorEnabledPool()
 
 // Add global error handlers
 process.on('unhandledRejection', (reason, promise) => {

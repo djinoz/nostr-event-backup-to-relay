@@ -12,6 +12,7 @@ A Node.js command-line tool for backing up your Nostr events from multiple sourc
 - ✅ **Dry run mode** - Preview what would be backed up without publishing
 - ✅ **Certificate bypass** - Works with self-signed certificates (Start9, etc.)
 - ✅ **Progress reporting** - Real-time feedback on backup progress
+- ✅ **Tor/.onion support** - Full support for .onion relays via Tor network
 
 ## Installation
 
@@ -20,6 +21,21 @@ git clone https://github.com/djinoz/nostr-event-backup-to-relay
 cd nostr-event-backup-to-relay
 npm install
 chmod +x nostr-backup.js
+```
+
+### For .onion Relay Support
+
+To use .onion relays, you need Tor running locally:
+
+```bash
+# Install Tor (macOS)
+brew install tor
+
+# Start Tor service
+brew services start tor
+
+# Verify Tor is running on port 9050
+lsof -i :9050
 ```
 
 ## Quick Start
@@ -91,6 +107,17 @@ chmod +x nostr-backup.js
   --days 365 --batch-size 5 --delay 2000
 ```
 
+**Backup to .onion relay:**
+```bash
+./nostr-backup.js -n npub1... -t ws://your-relay.onion --days 30
+```
+
+**Mix of clearnet and .onion source relays:**
+```bash
+./nostr-backup.js -n npub1... -t ws://your-relay.onion \
+  -r wss://relay.damus.io ws://some-relay.onion wss://nos.lol
+```
+
 ## Default Source Relays
 
 The tool uses these reliable relays by default:
@@ -126,6 +153,18 @@ This tool is designed to work with self-hosted relays that may use self-signed c
 - **Umbrel relays** - Handles non-standard certificates
 - **Other self-hosted solutions** - Sets `NODE_TLS_REJECT_UNAUTHORIZED=0`
 
+## Working with .onion Relays
+
+The tool has full Tor integration for privacy-focused backups:
+
+- **Automatic Tor detection** - Tests connectivity to Tor SOCKS5 proxy (127.0.0.1:9050)
+- **Mixed relay support** - Can query both clearnet and .onion relays simultaneously  
+- **Smart routing** - Automatically routes .onion addresses through Tor proxy
+- **Graceful fallback** - Continues with clearnet relays if Tor unavailable
+- **Target and source support** - Works for both backup destination and source relays
+
+**Note:** .onion relays typically use `ws://` (not `wss://`) protocol.
+
 ## Troubleshooting
 
 **Certificate errors with self-hosted relays:**
@@ -148,13 +187,21 @@ This tool is designed to work with self-hosted relays that may use self-signed c
 - Try increasing the time window: `--days 90`
 - Check if your events are on the default source relays
 
+**.onion relay connection issues:**
+- Ensure Tor is running: `brew services start tor`
+- Test Tor connectivity: `curl --socks5 127.0.0.1:9050 https://check.torproject.org`
+- Verify .onion relay URL is correct and active
+- Try with `--dry-run` first to test connectivity
+
 ## Technical Details
 
-- **Built with:** Node.js + nostr-tools
-- **Certificate handling:** Bypasses validation for self-signed certificates
+- **Built with:** Node.js + nostr-tools + socks-proxy-agent + ws
+- **Certificate handling:** Bypasses validation for self-signed certificates  
+- **Tor integration:** SOCKS5 proxy support with automatic .onion detection
 - **Duplicate detection:** Uses event IDs to avoid republishing existing events
 - **Rate limiting:** Configurable batch processing with delays
 - **Error handling:** Graceful handling of network issues and relay rejections
+- **Mixed relay support:** Simultaneously queries clearnet and .onion relays
 
 ## Contributing
 
@@ -167,5 +214,6 @@ MIT License
 ## Acknowledgments
 
 - Built with [nostr-tools](https://github.com/nbd-wtf/nostr-tools)
+- Tor/.onion integration adapted from [simple-nostr-over-tor](https://github.com/djinoz/simple-nostr-over-tor)
 - Inspired by the need for personal Nostr event backups
 - Designed for the self-hosting community
