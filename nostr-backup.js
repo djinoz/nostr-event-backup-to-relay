@@ -47,17 +47,32 @@ try {
 }
 
 // Parse kinds - handle both string and array inputs
+console.log('Debug - options.kinds:', options.kinds, 'type:', typeof options.kinds)
+
 let kinds
 if (Array.isArray(options.kinds)) {
+  console.log('Debug - treating as array')
   // Multiple -k flags: [30078, 30023]
-  kinds = options.kinds.map(k => parseInt(k))
+  kinds = options.kinds.flatMap(k => {
+    console.log('Debug - processing array element:', k, 'type:', typeof k)
+    if (typeof k === 'string' && k.includes(',')) {
+      const split = k.split(',').map(n => parseInt(n.trim()))
+      console.log('Debug - split result:', split)
+      return split
+    }
+    return [parseInt(k)]
+  })
 } else if (typeof options.kinds === 'string') {
+  console.log('Debug - treating as string')
   // Single -k flag with comma-separated: "30078,30023"
   kinds = options.kinds.split(',').map(k => parseInt(k.trim()))
 } else {
+  console.log('Debug - treating as number')
   // Single -k flag with single number: 30078
   kinds = [parseInt(options.kinds)]
 }
+
+console.log('Debug - final kinds array:', kinds)
 
 // Calculate time window
 let since, until
@@ -133,8 +148,18 @@ async function main() {
 
     console.log('🔄 Fetching events from source relays...')
     
+    // Debug: show the filter being used
+    console.log(`🔍 Filter: ${JSON.stringify(filter)}`)
+    
     // Fetch events from source relays
     const events = await pool.querySync(sourceRelays, filter)
+    
+    // Debug: show breakdown by kind
+    const eventsByKind = {}
+    events.forEach(event => {
+      eventsByKind[event.kind] = (eventsByKind[event.kind] || 0) + 1
+    })
+    console.log(`📊 Events by kind: ${JSON.stringify(eventsByKind)}`)
     
     console.log(`📥 Retrieved ${events.length} total events from source relays`)
 
